@@ -1,2 +1,4 @@
 #!/bin/bash
-
+source=src/server.py
+chmod +x $source
+python $source $1 $2 $3
