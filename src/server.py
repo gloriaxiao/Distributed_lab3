@@ -8,33 +8,49 @@ import time
 from threading import Thread
 from socket import AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR, socket, error
 
+###### MACROS ##########
+SLEEP = 0.05
+TIMEOUT = 0.2
+BASEPORT = 20000
+
 
 playlist = {}
+alives = {}
 
+heartbeat_thread = None
+master_thread = None
 #####
 crashAfterReceive = False
 crashAfterSend = False
 
 
-class MasterListener(Thread):
-	def __init__(self, pid, port):
-		global alives, heartbeat_thread
+class Heartbeat(Thread): 
+	def __init__(self, pid): 
 		Thread.__init__(self)
 		self.pid = pid
-		# self.num_servers = num_servers
+
+	def run(self): 
+		global alives
+		while True: 
+			new_alives = {} 
+			now = time.time()
+			for key in alives: 
+				if now - alives[key] <= 0.2: 
+					new_alives[key] = alives[key]
+			alives = new_alives
+			time.sleep(0.2)
+
+
+class MasterListener(Thread):
+	def __init__(self, pid, port):
+		global heartbeat_thread
+		Thread.__init__(self)
+		self.pid = pid
 		self.port = port
 		self.buffer = ""
-		# for i in range(self.num_servers):
-		# 	if i != pid:
-		# 		listeners[i] = ServerListener(pid, i)
-		# 		listeners[i].start()
-		# for i in range(self.num_servers): 
-		# 	if (i != pid): 
-		# 		clients[i] = ServerClient(pid, i) 
-		# 		clients[i].start()
-		# heartbeat_thread = Heartbeat(pid)
-		# heartbeat_thread.setDaemon(True)
-		# heartbeat_thread.start()
+		heartbeat_thread = Heartbeat(pid)
+		heartbeat_thread.setDaemon(True)
+		heartbeat_thread.start()
 		self.socket = socket(AF_INET, SOCK_STREAM)
 		self.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
 		self.socket.bind((ADDR, self.port))
@@ -97,12 +113,43 @@ class MasterListener(Thread):
 			self.master_conn.close()
 			self.socket.close()
 		except:
-			pass			
+			pass
+
+
+class ServerListener(Thread): 
+	def __init__(self, pid):
+		global BASEPORT
+		Thread.__init__(self)
+		self.pid = pid
+		self.sock = socket(AF_INET, SOCK_STREAM)
+		self.sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
+		self.port = BASEPORT + pid * 2
+		self.sock.bind(('localhost', self.port))
+		self.sock.listen(5)
+		self.buffer = ''
+
+	def run(self):
+		pass
+
+
+class ServerClient(Thread):
+
+	def __init__(self, pid):
+		pass
+
+	def run(self):
+		pass
 
 
 
-def main(id, port):
-	pass
+
+
+
+def main(pid, port):
+	global alives, master_thread
+	master_thread = MasterListener(pid, port)
+	for i in range(pid):
+
 
 
 if __name__ == '__main__':
