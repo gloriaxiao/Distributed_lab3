@@ -50,10 +50,10 @@ class Heartbeat(Thread):
 				if now - alives[key] <= 0.2: 
 					new_alives[key] = alives[key]
 			alives = new_alives
-			# if predecessor not in alives: 
-			# 	predecessor_crashed = True 
-			# if successor not in alives: 
-			# 	successor_crashed = True 
+			if predecessor not in alives and predecessor != -1: 
+				predecessor_crashed = True 
+			if successor not in alives and successor != -1: 
+				successor_crashed = True 
 			if len(alives) == 0: 
 				isHead = True 
 				isTail = True 
@@ -81,10 +81,15 @@ class Heartbeat(Thread):
 						direct_smaller = i 
 				predecessor = direct_bigger
 				successor = direct_smaller
-			# if predecessor_crashed and predecessor != -1 and len(acknowledgements_log) != 0: 
-			# 	server_clients[predecessor].send("crashACK " + acknowledgements_log[-1])
-			# if successor_crashed and successor != -1 and len(updates_log) != 0: 
-			# 	server_clients[successor].send("crashCMD " + updates_log[-1])
+			if predecessor_crashed and predecessor != -1 and len(acknowledgements_log) != 0: 
+				print str(self.pid) + " " + str(alives)
+				print str(self.pid) + " sent " + "crashACK " + acknowledgements_log[-1] + " to " + str(predecessor)
+				# server_clients[predecessor].send("crashACK " + acknowledgements_log[-1])
+				server_clients[predecessor].send('ack ' + ' '.join(acknowledgements_log[-1][1:-1].split(":")))
+			if successor_crashed and successor != -1 and len(updates_log) != 0: 
+				print str(self.pid) + " sent " + "crashCMD " + updates_log[-1] + " to " + str(successor)				
+				# server_clients[successor].send("crashCMD " + updates_log[-1])
+				server_clients[successor].send(' '.join(updates_log[-1][1:-1].split(":")))
 			time.sleep(0.2)
 
 
@@ -226,34 +231,39 @@ class ServerListener(Thread):
 							+ ' ' + ','.join(acknowledgements_log))
 					alives[self.target_pid] = time.time()
 				elif cmd == "add":
-					if crashAfterReceive: 
-						print str(self.pid) + " receiving next message, need crash"
-						exit() 
 					_, args = l.split(' ', 1)
 					songName, URL = args.split(' ', 1)
-					playlist[songName] = URL 
-					updates_log.append("<add:" + songName + ":" + URL + ">")
-					if successor != -1: 
-						server_clients[successor].send(l) 
-					else: 
-						acknowledgements_log.append("<add:" + songName + ":" + URL + ">")
-						server_clients[predecessor].send("ack " + l) 
-					if crashAfterSend: 
-						exit() 
+					new_op = "<add:" + songName + ":" + URL + ">"
+					if len(updates_log) == 0 or updates_log[-1] != new_op: 
+						if crashAfterReceive: 
+							print str(self.pid) + " receiving next message, need crash"
+							exit() 
+						playlist[songName] = URL 
+						updates_log.append(new_op)
+						if successor != -1: 
+							server_clients[successor].send(l) 
+						else: 
+							acknowledgements_log.append("<add:" + songName + ":" + URL + ">")
+							server_clients[predecessor].send("ack " + l) 
+						if crashAfterSend: 
+							exit() 
 				elif cmd == "delete":
-					if crashAfterReceive: 
-						print str(self.pid) + " receiving next message, need crash"
-						exit() 
 					_, songName = l.split(' ', 1)
-					del playlist[songName]
-					updates_log.append("<delete:" + songName + ">")
-					if successor != -1: 
-						server_clients[successor].send(l) 
-					else: 
-						acknowledgements_log.append("<delete:" + songName + ">")
-						server_clients[predecessor].send("ack " + l) 
-					if crashAfterSend: 
-						exit() 
+					new_op = "<delete:" + songName + ">"
+					if len(updates_log) == 0 or updates_log[-1] != new_op: 
+						if crashAfterReceive: 
+							print str(self.pid) + " receiving next message, need crash"
+							exit() 
+						print "before deleting " + str(playlist)
+						del playlist[songName]
+						updates_log.append(new_op)
+						if successor != -1: 
+							server_clients[successor].send(l) 
+						else: 
+							acknowledgements_log.append("<delete:" + songName + ">")
+							server_clients[predecessor].send("ack " + l) 
+						if crashAfterSend: 
+							exit() 
 				elif cmd == "snapshot":
 					log = '<' + ''.join(updates_log) + '>' + '<' + ''.join(acknowledgements_log) + '>'
 					master_thread.master_conn.send("snapshot " + log + "\n")
@@ -299,6 +309,11 @@ class ServerListener(Thread):
 				# elif cmd == "crashCMD": 
 				# 	_, arg = l.split(' ', 1)
 				# 	if updates_log[-1] != arg: 
+				# 		words = arg.split(':')
+				# 		if words[0] == 'add': 
+				# 			playlist[words[1]] = words[2]
+				# 		else: 
+				# 			del playlist[words[1]]
 				# 		updates_log.append(arg) 
 				# 		if successor != -1: 
 				# 			server_clients[successor].send(' '.join(arg[1:-1].split(':'))) 
