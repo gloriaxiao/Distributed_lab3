@@ -51,8 +51,10 @@ class Heartbeat(Thread):
 				if now - alives[key] <= 0.2: 
 					new_alives[key] = alives[key]
 				else:
-					replace_succ = (succ_id == key)
-					replace_pred = (pred_id == key)
+					if not replace_succ: 
+						replace_succ = (succ_id == key)
+					if not replace_pred: 
+						replace_pred = (pred_id == key)
 			alives = new_alives
 			# replace the predecessor, successor
 			if replace_pred:
@@ -62,8 +64,9 @@ class Heartbeat(Thread):
 						pred_id = k
 						break
 				print str(self.pid) + " decided to replace predecessor to " + str(pred_id)
-				if len(ack_log) != 0: 
-					prefix_clients[pred_id].send('ack ' + ','.join(ack_log))
+				if pred_id != -1: 
+					if len(ack_log) != 0: 
+						prefix_clients[pred_id].send('ack ' + ','.join(ack_log))
 			if replace_succ:
 				succ_id = -1
 				# print alives
@@ -73,9 +76,13 @@ class Heartbeat(Thread):
 						succ_id = k
 						break
 				print str(self.pid) + " decided to replace successor to " + str(succ_id)
-				if len(update_log) != 0: 
-					print update_log
-					info_propagate(update_log[-1][1:-1].split(":")[0])
+				if succ_id != -1: 
+					if len(update_log) != 0: 
+						print update_log
+						info_propagate(update_log[-1][1:-1].split(":")[0])
+				else: 
+					if len(ack_log) != 0: 
+						prefix_clients[pred_id].send('ack ' + ','.join(ack_log))
 			time.sleep(0.2)
 
 
@@ -88,7 +95,7 @@ def info_propagate(command):
 			send_msg += ' ' + ",".join(update_log)
 		print "{:d} sends {} to its successor {:d}\n".format(self_pid, send_msg, succ_id)
 		suffix_clients[succ_id].send(send_msg)
-		if crashAfterSend:
+		if crashAfterSend and (command == 'add' or command == 'delete' or command == 'snapshot'):
 			exit()
 
 
@@ -196,6 +203,7 @@ class MasterListener(Thread):
 					if crashAfterReceive: 
 						exit()
 					log = '<' + ''.join(update_log) + '>' + '<' + ''.join(ack_log) + '>'
+					print str(self.pid) + " sent " + log 
 					self.master_conn.send("snapshot " + log + "\n")
 					info_propagate(cmd)
 				else:
@@ -301,6 +309,7 @@ class ServerListener(Thread):
 					if pred_id == -1: # reach the head
 						master_thread.master_conn.send("ack commit\n")
 					else: # back propagation
+						print "*********************" + str(self.pid) + " send ack log " + l + " to " + str(pred_id)
 						prefix_clients[pred_id].send(l)
 				else:
 					print "Unknown command {}".format(l)
@@ -362,8 +371,8 @@ class ServerClient(Thread):
 
 
 def exit():
-	global suffix_listeners, suffix_clients, prefix_clients, prefix_listeners
-	print "exit is called"
+	global suffix_listeners, suffix_clients, prefix_clients, prefix_listeners, self_pid
+	print "exit is called by " + str(self_pid)
 	for i in suffix_listeners:
 		suffix_listeners[i].kill()
 	for i in prefix_listeners:
