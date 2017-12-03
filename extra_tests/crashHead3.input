@@ -1,0 +1,30 @@
+addReplica 10035
+addReplica 10036
+addReplica 10037
+addReplica 10038
+addReplica 10039
+addReplica 10040
+addReplica 10041
+addReplica 10042
+addReplica 10043
+addReplica 10044
+add song1 URL1
+crashAfterReceiving 0
+add song2 URL2
+add song3 URL3
+crashAfterReceiving 0
+add song4 URL4
+add song5 URL5
+crashAfterReceiving 0
+delete song3
+add song6 URL6
+crashAfterSending 0
+add song7 URL7
+get song1
+get song2
+get song3
+get song4
+get song5
+get song6
+get song7
+snapshot

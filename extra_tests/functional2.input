@@ -1,0 +1,26 @@
+addReplica 10025
+addReplica 10026
+addReplica 10027
+addReplica 10028
+addReplica 10029
+addReplica 10030
+addReplica 10031
+addReplica 10032
+addReplica 10033
+addReplica 10034
+add song1 URL1
+add song2 URL2
+get song2
+delete song2
+get song2
+add song3 URL3
+add song4 URL4
+add song2 URL2b
+delete song3
+add song5 URL5
+get song1
+get song2
+get song3
+get song4
+get song5
+snapshot

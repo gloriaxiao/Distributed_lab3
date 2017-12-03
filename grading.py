@@ -7,7 +7,7 @@ import shutil
 os.system('./build')
 
 test_output = 'test_output'
-tests = 'tests'
+tests = 'extra_tests'
 if len(sys.argv) == 2:
     tests = sys.argv[1]
 try:
