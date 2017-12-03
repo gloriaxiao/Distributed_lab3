@@ -61,12 +61,21 @@ class Heartbeat(Thread):
 					if k > self.pid:
 						pred_id = k
 						break
+				print str(self.pid) + " decided to replace predecessor to " + str(pred_id)
+				if len(ack_log) != 0: 
+					prefix_clients[pred_id].send('ack ' + ','.join(ack_log))
 			if replace_succ:
 				succ_id = -1
+				# print alives
 				for k in sorted(alives.keys(), reverse=True):
+					# print "k: " + str(k) + " pid: " + str(self.pid) 
 					if k < self.pid:
 						succ_id = k
 						break
+				print str(self.pid) + " decided to replace successor to " + str(succ_id)
+				if len(update_log) != 0: 
+					print update_log
+					info_propagate(update_log[-1][1:-1].split(":")[0])
 			time.sleep(0.2)
 
 
@@ -102,8 +111,8 @@ def update_local_history(logs):
 	if pred_id != -1:
 		print "{:d} sends ack {} to its pred {:d}\n".format(self_pid, ','.join(ack_log), pred_id)
 		prefix_clients[pred_id].send('ack ' + ','.join(ack_log))
-		if succ_id == -1 and crashAfterSend:
-			exit()
+		# if succ_id == -1 and crashAfterSend:
+		# 	exit()
 
 
 def update_ack_log(logs):
@@ -123,7 +132,7 @@ class MasterListener(Thread):
 		self.pid = pid
 		self.port = port
 		self.buffer = ""
-		for i in range(10): 
+		for i in range(12): 
 			if (i == pid):
 				continue
 			elif (i < pid):
@@ -132,7 +141,7 @@ class MasterListener(Thread):
 			else:
 				prefix_listeners[i] = ServerListener(pid, i)
 				prefix_listeners[i].start()
-		for i in range(10):
+		for i in range(12):
 			if (i == pid):
 				continue
 			elif (i < pid):

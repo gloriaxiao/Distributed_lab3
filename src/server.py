@@ -40,7 +40,7 @@ class MasterListener(Thread):
 		self.pid = pid
 		self.port = port
 		self.buffer = ""
-		for i in range(10): 
+		for i in range(12): 
 			if (i != pid): 
 				server_listeners[i] = ServerListener(pid, i)
 				server_listeners[i].start()
