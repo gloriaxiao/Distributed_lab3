@@ -1,4 +1,4 @@
 #!/bin/bash
-source=src/server.py
+source=src/server1.py
 chmod +x $source
 python $source $1 $2

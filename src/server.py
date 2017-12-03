@@ -267,9 +267,9 @@ class ServerClient(Thread):
 
 	def run(self):
 		while True: 
-			try: 
+			try:
 				self.sock.send("heartbeat\n")
-			except: 
+			except:
 				try: 
 					self.sock = None 
 					s = socket(AF_INET, SOCK_STREAM)
@@ -280,7 +280,7 @@ class ServerClient(Thread):
 				except:
 					# TODO: lost connection, need to reconnect to next one in chain 
 					pass 
-			time.sleep(0.05) 
+			time.sleep(SLEEP)
 
 	def send(self, msg): 
 		if not msg.endswith("\n"): 
