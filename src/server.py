@@ -9,20 +9,20 @@ from threading import Thread
 from socket import AF_INET, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR, socket, error
 
 ###### MACROS ##########
-SLEEP = 0.05
-TIMEOUT = 0.2
-BASEPORT = 20000
 ADDR = 'localhost'
 
 playlist = {}
 alives = {} 
 
-server_listeners = {} 
+suffix_listeners = {}
+suffix_clients = {}
+prefix_clients = {}
+prefix_listeners = {}
+wait_to_start = []
 
-successor_sender = None 
-predecessor_sender = None 
-successor_listener = None 
-predecessor_listener = None 
+pred_id = -1
+succ_id = -1
+self_pid = -1
 
 heartbeat_thread = None
 master_thread = None
@@ -30,29 +30,135 @@ master_thread = None
 crashAfterReceive = False
 crashAfterSend = False
 
-updates_log = [] 
-acknowledgements_log = []
+
+update_log = [] 
+ack_log = []
+
+
+class Heartbeat(Thread): 
+	def __init__(self, pid): 
+		Thread.__init__(self)
+		self.pid = pid
+
+	def run(self): 
+		global alives, succ_id, pred_id, prefix_clients, wait_to_start
+		while True: 
+			new_alives = {} 
+			now = time.time()
+			replace_succ = False
+			replace_pred = False
+			for key in alives: 
+				if now - alives[key] <= 0.2: 
+					new_alives[key] = alives[key]
+				else:
+					if not replace_succ: 
+						replace_succ = (succ_id == key)
+					if not replace_pred: 
+						replace_pred = (pred_id == key)
+			alives = new_alives
+			# replace the predecessor, successor
+			if replace_pred:
+				pred_id = -1
+				for k in sorted(alives.keys()):
+					if k > self.pid:
+						pred_id = k
+						break
+				print str(self.pid) + " decided to replace predecessor to " + str(pred_id)
+				if pred_id != -1: 
+					if len(ack_log) != 0: 
+						prefix_clients[pred_id].send('ack ' + ','.join(ack_log))
+			if replace_succ:
+				succ_id = -1
+				# print alives
+				for k in sorted(alives.keys(), reverse=True):
+					# print "k: " + str(k) + " pid: " + str(self.pid) 
+					if k < self.pid:
+						succ_id = k
+						break
+				print str(self.pid) + " decided to replace successor to " + str(succ_id)
+				if succ_id != -1: 
+					if len(update_log) != 0: 
+						print update_log
+						info_propagate(update_log[-1][1:-1].split(":")[0])
+				else: 
+					if len(ack_log) != 0: 
+						prefix_clients[pred_id].send('ack ' + ','.join(ack_log))
+			time.sleep(0.2)
+
+
+def info_propagate(command):
+	global suffix_clients, crashAfterSend, ack_log, succ_id, self_pid
+	global update_log, pred_id, prefix_clients
+	if succ_id != -1: # not the tail
+		send_msg = command
+		if command == 'add' or command == 'delete':
+			send_msg += ' ' + ",".join(update_log)
+		print "{:d} sends {} to its successor {:d}\n".format(self_pid, send_msg, succ_id)
+		suffix_clients[succ_id].send(send_msg)
+		if crashAfterSend and (command == 'add' or command == 'delete' or command == 'snapshot'):
+			exit()
+
+
+def update_local_history(logs):
+	global update_log, playlist, succ_id, ack_log, prefix_clients, self_pid
+	for info in logs:
+		if not info:
+			continue
+		if info not in update_log:
+			update_log.append(info)
+			cmd, args = info[1:-1].split(':', 1)
+			if cmd == 'add':
+				name, url = args.split(':')
+				playlist[name] = url
+			elif cmd == 'delete':
+				del playlist[args.strip()]
+		if succ_id == -1 and info not in ack_log:
+			# it's the tail, update the ack_log as well
+			ack_log.append(info)
+	if pred_id != -1:
+		print "{:d} sends ack {} to its pred {:d}\n".format(self_pid, ','.join(ack_log), pred_id)
+		prefix_clients[pred_id].send('ack ' + ','.join(ack_log))
+		# if succ_id == -1 and crashAfterSend:
+		# 	exit()
+
+
+def update_ack_log(logs):
+	global ack_log
+	for info in logs:
+		if not info:
+			continue
+		if info not in ack_log:
+			ack_log.append(info)
+
 
 class MasterListener(Thread):
 	def __init__(self, pid, port):
 		Thread.__init__(self)
-		global successor_listener, successor_sender, server_listeners, predecessor_listener, predecessor_sender
+		global suffix_listeners, suffix_clients, prefix_clients, prefix_listeners
+		global wait_to_start
 		self.pid = pid
 		self.port = port
 		self.buffer = ""
 		for i in range(12): 
-			if (i != pid): 
-				server_listeners[i] = ServerListener(pid, i)
-				server_listeners[i].start()
-		for i in range(pid - 1, -1, -1): 
-			print str(pid) + " trying to connect to " + str(i)
-			try: 
-				successor_sender = ServerClient(pid, i)
-				successor_sender.start() 
-				successor_listener = server_listeners[i]
-				break 
-			except: 
-				print str(pid) + " cannot connect to " + str(i)
+			if (i == pid):
+				continue
+			elif (i < pid):
+				suffix_listeners[i] = ServerListener(pid, i)
+				suffix_listeners[i].start()
+			else:
+				prefix_listeners[i] = ServerListener(pid, i)
+				prefix_listeners[i].start()
+		for i in range(12):
+			if (i == pid):
+				continue
+			elif (i < pid):
+				suffix_clients[i] = ServerClient(pid, i)
+				suffix_clients[i].start()
+			else:
+				prefix_clients[i] = ServerClient(pid, i)
+				wait_to_start.append(i)
+		heartbeat_thread = Heartbeat(pid)
+		heartbeat_thread.start()
 		self.socket = socket(AF_INET, SOCK_STREAM)
 		self.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
 		self.socket.bind((ADDR, self.port))
@@ -60,10 +166,9 @@ class MasterListener(Thread):
 		self.master_conn, self.master_addr = self.socket.accept()
 		self.connected = True
 
-
 	def run(self):
 		global playlist, crashAfterSend, crashAfterReceive
-		global updates_log, acknowledgements_log
+		global update_log, ack_log, alives
 		while self.connected:
 			if '\n' in self.buffer:
 				(l, rest) = self.buffer.split("\n", 1)
@@ -82,41 +187,25 @@ class MasterListener(Thread):
 					exit()
 				elif cmd == "add":
 					if crashAfterReceive: 
-						exit() 
+						exit()
 					_, args = l.split(' ', 1)
 					songName, URL = args.split(' ', 1)
-					playlist[songName] = URL 
-					updates_log.append("<add:" + songName + ":" + URL + ">")
-					if successor_sender: # not the tail 
-						successor_sender.send(l)
-						if crashAfterSend: 
-							exit() 
-					else: # replica is both head and tail 
-						acknowledgements_log.append("<delete:" + songName + ">")
-						self.master_conn.send('ack commit\n')
+					update_local_history(["<add:" + songName + ":" + URL + ">"])
+					info_propagate(cmd)
 				elif cmd == "delete":
 					if crashAfterReceive: 
 						exit() 
 					_, songName = l.split(' ', 1)
-					del playlist[songName]
-					updates_log.append("<delete:" + songName + ">")
-					if successor_sender: # not the tail 
-						successor_sender.send(l) 
-						if crashAfterSend: 
-							exit() 
-					else: # replica is both head and tail 
-						acknowledgements_log.append("<delete:" + songName + ">")
-						self.master_conn.send('ack commit\n')
+					update_local_history(["<delete:" + songName + ">"])
+					info_propagate(cmd)
+
 				elif cmd == "snapshot":
 					if crashAfterReceive: 
-						exit() 
-					log = '<' + ''.join(updates_log) + '>' + '<' + ''.join(acknowledgements_log) + '>'
-					# print str(self.pid) + " sent " + log 
+						exit()
+					log = '<' + ''.join(update_log) + '>' + '<' + ''.join(ack_log) + '>'
+					print str(self.pid) + " sent " + log 
 					self.master_conn.send("snapshot " + log + "\n")
-					if successor_sender:
-						successor_sender.send(l) 
-						if crashAfterSend: 
-							exit() 
+					info_propagate(cmd)
 				else:
 					print "Unknown command {}".format(l)
 			else:
@@ -152,89 +241,79 @@ class ServerListener(Thread):
 
 	def run(self): 
 		self.conn, self.addr = self.sock.accept()
-		global predecessor_listener, predecessor_sender
+		global suffix_clients, prefix_clients, wait_to_start
+		global succ_id, pred_id, update_log, ack_log, playlist
+		global finish_init
 		while True: 
 			if "\n" in self.buffer: 
 				(l, rest) = self.buffer.split("\n", 1)
-				self.buffer = rest 
+				self.buffer = rest
 				cmd = l.split()[0]
-				if (l == "heartbeat"): 
-					if self.target_pid > self.pid and predecessor_listener == None: 
-						predecessor_sender = ServerClient(self.pid, self.target_pid)
-						predecessor_listener = server_listeners[self.target_pid]
-						predecessor_sender.send("info " + ','.join(playlist.keys()) 
-							+ ' ' + ','.join(playlist.values()) + ' ' + ','.join(updates_log) 
-							+ ' ' + ','.join(acknowledgements_log))
-				elif cmd == "info": 
+				if (l == "heartbeat"):
+					alives[self.target_pid] = time.time()
+					if (self.target_pid > succ_id and self.target_pid < self.pid):
+						succ_id = self.target_pid
+					if (self.target_pid > self.pid and pred_id == -1):
+						# New Head
+						print "{:d} acknowledge {:d} as the new head\n".format(self.pid, self.target_pid)
+						pred_id = self.target_pid
+						msgs = [','.join(playlist.keys()), ','.join(playlist.values()), ','.join(update_log), ','.join(ack_log)]
+						info_msg = "newHead " + ';'.join(msgs)
+						print "{:d} sends {:d} {}".format(self.pid, pred_id, info_msg)
+						prefix_clients[pred_id].send(info_msg)
+					if self.target_pid in wait_to_start: 
+						print "{:d} start a client for {:d}".format(self.pid, self.target_pid)
+						wait_to_start.remove(self.target_pid)
+						prefix_clients[self.target_pid].start()
+
+				elif cmd == "newHead":
 					_, args = l.split(' ', 1)
-					playlist_key_info, other = args.split(' ', 1)
-					playlist_value_info, other = other.split(' ', 1)
-					updates_log_info, acknowledgements_log_info = other.split(' ', 1)
-					if playlist_key_info != '' and len(playlist) == 0: 
-						playlist_keys = playlist_key_info.split(',')
-						playlist_values = playlist_value_info.split(',')
-						for i in range(len(playlist_keys)): 
-							playlist[playlist_keys[i]] = playlist_values[i]
-					if updates_log_info != '' and len(updates_log) == 0: 
-						updates_log.extend(updates_log_info.split(','))
-					if acknowledgements_log_info != '' and len(acknowledgements_log) == 0: 
-						acknowledgements_log.extend(acknowledgements_log_info.split(','))
-				elif cmd == "add":
+					print "{:d} gets newHead information from {:d}".format(self.pid, self.target_pid)
+					plist_key_info, plist_value_info, update_log_info, ack_log_info = args.split(';')
+					plist_keys = plist_key_info.split(',')
+					plist_values = plist_value_info.split(',')
+					update_logs = update_log_info.split(',')
+					ack_logs = ack_log_info.split(',')
+					if plist_keys and not playlist:
+						for i in range(len(plist_keys)): 
+							playlist[plist_keys[i]] = plist_values[i]
+					for log in update_logs:
+						if log and log not in update_log:
+							update_log.append(log)
+					for log in ack_logs:
+						if log and log not in ack_log:
+							ack_log.append(log)
+				
+				elif cmd == "add" or cmd == "delete":
 					if crashAfterReceive: 
-						exit() 
+						exit()
 					_, args = l.split(' ', 1)
-					songName, URL = args.split(' ', 1)
-					playlist[songName] = URL 
-					print playlist 
-					updates_log.append("<add:" + songName + ":" + URL + ">")
-					if successor_sender: # not the tail 
-						successor_sender.send(l)
-						if crashAfterSend: 
-							exit() 
-					else: # replica is both head and tail 
-						acknowledgements_log.append("<add:" + songName + ":" + URL + ">")
-						predecessor_sender.send("ack " + l)
-				elif cmd == "delete":
-					if crashAfterReceive: 
-						exit() 
-					_, songName = l.split(' ', 1)
-					del playlist[songName]
-					updates_log.append("<delete:" + songName + ">")
-					if successor_sender: # not the tail 
-						successor_sender.send(l) 
-						if crashAfterSend: 
-							exit() 
-					else: # replica is both head and tail 
-						acknowledgements_log.append("<delete:" + songName + ">")
-						predecessor_sender.send("ack " + l)
+					logs = args.split(',')
+					print "{:d} receives log from {:d}".format(self.pid, self.target_pid)
+					print logs
+					update_local_history(logs)
+					info_propagate(cmd)
+
 				elif cmd == "snapshot":
 					if crashAfterReceive: 
-						exit() 
-					log = '<' + ''.join(updates_log) + '>' + '<' + ''.join(acknowledgements_log) + '>'
-					# print str(self.pid) + " sent " + log 
+						exit()
+					log = '<' + ''.join(update_log) + '>' + '<' + ''.join(ack_log) + '>'
+					print str(self.pid) + " sent " + log 
 					master_thread.master_conn.send("snapshot " + log + "\n")
-					if successor_sender:
-						successor_sender.send(l) 
-						if crashAfterSend: 
-							exit() 
+					info_propagate(cmd)
+
 				elif cmd == "ack": 
-					print str(self.pid) + " received ack " + l 
-					_, args = l.split(' ', 1)
-					op, song_info = args.split(' ', 1)
-					if op == "add": 
-						songName, URL = song_info.split(' ', 1)
-						acknowledgements_log.append("<add:" + songName + ":" + URL + ">")
-					elif op == "delete": 
-						acknowledgements_log.append("<delete:" + song_info + ">")
-					else: 
-						print "Unknown command {}".format(l)
-					if predecessor_sender == None: 
+					print str(self.pid) + " received " + l 
+					_, log = l.split(' ', 1)
+					update_ack_log(log.split(','))
+					if pred_id == -1: # reach the head
 						master_thread.master_conn.send("ack commit\n")
-					else: 
-						predecessor_sender.send(l)
-				else: 
+					else: # back propagation
+						print "*********************" + str(self.pid) + " send ack log " + l + " to " + str(pred_id)
+						prefix_clients[pred_id].send(l)
+				else:
 					print "Unknown command {}".format(l)
-			else: 
+			else:
 				try: 
 					data = self.conn.recv(1024)
 					if data == "": 
@@ -258,45 +337,31 @@ class ServerClient(Thread):
 		self.pid = pid
 		self.target_pid = target_pid 
 		self.port = 29999 - target_pid * 100 - pid
-		self.sock = None 
-		s = socket(AF_INET, SOCK_STREAM)
-		s.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-		s.connect((ADDR, self.port))
-		self.sock = s 
-		self.sock.send("heartbeat\n")
+		self.sock = None
 
 	def run(self):
 		while True: 
-			try:
-				self.sock.send("heartbeat\n")
-			except:
-				try: 
-					self.sock = None 
-					s = socket(AF_INET, SOCK_STREAM)
-					s.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-					s.connect((ADDR, self.port))
-					self.sock = s 
-					self.sock.send("heartbeat\n")
-				except:
-					# TODO: lost connection, need to reconnect to next one in chain 
-					pass 
-			time.sleep(SLEEP)
+			self.send("heartbeat")
+			time.sleep(0.05)
 
 	def send(self, msg): 
 		if not msg.endswith("\n"): 
 			msg = msg + "\n"
-		try: 
+		try:
 			self.sock.send(msg)
-		except: 
+		except:
+			if self.sock:
+	  			self.sock.close()
+	  			self.sock = None
 			try: 
-				self.sock = None 
 				s = socket(AF_INET, SOCK_STREAM)
 				s.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
 				s.connect((ADDR, self.port))
 				self.sock = s 
 				self.sock.send(msg)
-			except: 
-				pass 
+			except:
+				time.sleep(0.05)
+
 
 	def kill(self):
 		try:
@@ -304,16 +369,24 @@ class ServerClient(Thread):
 		except:
 			pass
 
+
 def exit():
-	print "exit is called"
-	for i in server_listeners:
-		server_listeners[i].kill()
-	predecessor_sender.kill()
-	successor_sender.kill()
+	global suffix_listeners, suffix_clients, prefix_clients, prefix_listeners, self_pid
+	print "exit is called by " + str(self_pid)
+	for i in suffix_listeners:
+		suffix_listeners[i].kill()
+	for i in prefix_listeners:
+		prefix_listeners[i].kill()
+	for i in suffix_clients:
+		suffix_clients[i].kill()
+	for i in prefix_clients:
+		prefix_clients[i].kill()
 	os._exit(0)
 
+
 def main(pid, port):
-	global master_thread
+	global master_thread, self_pid
+	self_pid = pid
 	master_thread = MasterListener(pid, port)
 	master_thread.start()
 
